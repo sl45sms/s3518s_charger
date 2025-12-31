@@ -6,6 +6,12 @@
 #include <h1_SW35xx.h>
 using namespace h1_SW35xx;
 
+// Some Adafruit_ST77xx versions don't define ST77XX_DARKGREY.
+// Fall back to a known color token to keep the sketch portable.
+#ifndef ST77XX_DARKGREY
+#define ST77XX_DARKGREY ST77XX_WHITE
+#endif
+
 // Match your ESP-IDF example
 #define LCD_HOST SPI2_HOST
 
@@ -44,6 +50,103 @@ static void backlight(bool on) {
 
 
 SW35xx sw(Wire);
+
+// --- Display layout ---
+static constexpr uint8_t UI_TEXT_SIZE = 2;
+static constexpr int16_t UI_LINE_HEIGHT = 8 * UI_TEXT_SIZE + 2; // classic 6x8 font
+static constexpr uint8_t UI_TEXT_LINES = 8;                     // lines 0..7 used today
+static constexpr int16_t SCOPE_Y = UI_TEXT_LINES * UI_LINE_HEIGHT;
+static constexpr int16_t SCOPE_H = DISPLAY_HEIGHT - SCOPE_Y;
+static constexpr int16_t SCOPE_W = DISPLAY_WIDTH;
+
+// --- Oscilloscope buffers (one sample per loop) ---
+static uint16_t voutHistory_mV[SCOPE_W];
+static uint16_t ioutHistory_mA[SCOPE_W];
+static uint16_t scopeWriteIndex = 0;
+static bool scopeInitialized = false;
+
+static inline int16_t mapToScopeY(uint16_t value, uint16_t minValue, uint16_t maxValue, int16_t yTop, int16_t height) {
+  if (height <= 1) return yTop;
+  uint16_t range = (maxValue > minValue) ? (maxValue - minValue) : 1;
+  uint16_t clamped = value;
+  if (clamped < minValue) clamped = minValue;
+  if (clamped > maxValue) clamped = maxValue;
+  // Higher value should be higher on screen (smaller y).
+  int32_t scaled = (int32_t)(clamped - minValue) * (height - 1) / range;
+  return (int16_t)(yTop + (height - 1) - scaled);
+}
+
+static void drawOscilloscope(uint16_t vout_mV, uint16_t iout_total_mA) {
+  if (SCOPE_H <= 8) return; // not enough space
+
+  if (!scopeInitialized) {
+    for (int16_t i = 0; i < SCOPE_W; i++) {
+      voutHistory_mV[i] = vout_mV;
+      ioutHistory_mA[i] = iout_total_mA;
+    }
+    scopeWriteIndex = 0;
+    scopeInitialized = true;
+  }
+
+  voutHistory_mV[scopeWriteIndex] = vout_mV;
+  ioutHistory_mA[scopeWriteIndex] = iout_total_mA;
+  scopeWriteIndex = (uint16_t)((scopeWriteIndex + 1) % SCOPE_W);
+
+  // Autoscale from history with small padding.
+  uint16_t vMin = 65535, vMax = 0;
+  uint16_t iMin = 65535, iMax = 0;
+  for (int16_t i = 0; i < SCOPE_W; i++) {
+    uint16_t vv = voutHistory_mV[i];
+    uint16_t ii = ioutHistory_mA[i];
+    if (vv < vMin) vMin = vv;
+    if (vv > vMax) vMax = vv;
+    if (ii < iMin) iMin = ii;
+    if (ii > iMax) iMax = ii;
+  }
+  // Add a little range so flat signals still show.
+  if (vMax - vMin < 50) { // 50mV min range
+    uint16_t mid = (uint16_t)((vMax + vMin) / 2);
+    vMin = (mid > 25) ? (uint16_t)(mid - 25) : 0;
+    vMax = (uint16_t)(mid + 25);
+  }
+  if (iMax - iMin < 50) { // 50mA min range
+    uint16_t mid = (uint16_t)((iMax + iMin) / 2);
+    iMin = (mid > 25) ? (uint16_t)(mid - 25) : 0;
+    iMax = (uint16_t)(mid + 25);
+  }
+
+  // Clear and draw a simple scope frame.
+  tft.fillRect(0, SCOPE_Y, SCOPE_W, SCOPE_H, ST77XX_BLACK);
+  tft.drawRect(0, SCOPE_Y, SCOPE_W, SCOPE_H, ST77XX_DARKGREY);
+  // Midline for quick reference.
+  tft.drawFastHLine(1, SCOPE_Y + SCOPE_H / 2, SCOPE_W - 2, ST77XX_DARKGREY);
+
+  // Plot oldest->newest left->right.
+  const int16_t plotTop = SCOPE_Y + 1;
+  const int16_t plotH = SCOPE_H - 2;
+  if (plotH <= 1) return;
+
+  int16_t prevYv = 0;
+  int16_t prevYi = 0;
+  bool havePrev = false;
+
+  for (int16_t x = 0; x < SCOPE_W; x++) {
+    uint16_t idx = (uint16_t)((scopeWriteIndex + x) % SCOPE_W);
+    uint16_t vv = voutHistory_mV[idx];
+    uint16_t ii = ioutHistory_mA[idx];
+
+    int16_t yv = mapToScopeY(vv, vMin, vMax, plotTop, plotH);
+    int16_t yi = mapToScopeY(ii, iMin, iMax, plotTop, plotH);
+
+    if (havePrev) {
+      tft.drawLine(x - 1, prevYv, x, yv, ST77XX_CYAN);
+      tft.drawLine(x - 1, prevYi, x, yi, ST77XX_YELLOW);
+    }
+    prevYv = yv;
+    prevYi = yi;
+    havePrev = true;
+  }
+}
 
 const char *fastChargeType2String(SW35xx::fastChargeType_t fastChargeType) {
   switch (fastChargeType) {
@@ -92,10 +195,10 @@ const char *fastChargeType2String(SW35xx::fastChargeType_t fastChargeType) {
 static void drawStatusToDisplay() {
   // Update only the rows that changed to avoid flicker.
   // Text size is set to 2 in setup(). Adafruit classic font is 6x8 px.
-  const uint8_t textSize = 2;
+  const uint8_t textSize = UI_TEXT_SIZE;
   const uint16_t fg = ST77XX_WHITE;
   const uint16_t bg = ST77XX_BLACK;
-  const int16_t lineHeight = 8 * textSize + 2; // +2 for breathing room
+  const int16_t lineHeight = UI_LINE_HEIGHT; // +2 for breathing room
 
   tft.setTextColor(fg, bg);
   tft.setTextWrap(false);
@@ -138,6 +241,10 @@ static void drawStatusToDisplay() {
   } else {
     drawLine(7, "");
   }
+
+  // Bottom oscilloscope: VOUT (cyan) and total output current (yellow).
+  uint16_t total_mA = (uint16_t)(sw.iout_usbc_mA + sw.iout_usba_mA);
+  drawOscilloscope((uint16_t)sw.vout_mV, total_mA);
 }
 
 
