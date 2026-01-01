@@ -7,14 +7,12 @@
 using namespace h1_SW35xx;
 
 // Some Adafruit_ST77xx versions don't define ST77XX_DARKGREY.
-// Fall back to a known color token to keep the sketch portable.
+// Fall back to a close color.
 #ifndef ST77XX_DARKGREY
-#define ST77XX_DARKGREY ST77XX_WHITE
+#define ST77XX_DARKGREY 0x7BEF
 #endif
 
-// Match your ESP-IDF example
-#define LCD_HOST SPI2_HOST
-
+// --- Display parameters ---
 #define DISPLAY_WIDTH 240
 #define DISPLAY_HEIGHT 240
 
@@ -27,7 +25,7 @@ using namespace h1_SW35xx;
 #define TFT_CS   -1 //CS-less / tied low on the module
 #define TFT_BLK  3  //board pin 3,  Display backlight pin
 
-// You sould use SPI mode 3 for this panel.
+// Sould use SPI mode 3 for this panel.
 #define TFT_SPI_MODE SPI_MODE3
 // Set to 80MHz maximum for ESP32-C6
 #define TFT_SPI_HZ   80000000
@@ -48,7 +46,6 @@ static void backlight(bool on) {
 #define I2C_SDA 23
 #define I2C_SCL 20
 
-
 SW35xx sw(Wire);
 
 // --- Display layout ---
@@ -58,6 +55,15 @@ static constexpr uint8_t UI_TEXT_LINES = 8;                     // lines 0..7 us
 static constexpr int16_t SCOPE_Y = UI_TEXT_LINES * UI_LINE_HEIGHT;
 static constexpr int16_t SCOPE_H = DISPLAY_HEIGHT - SCOPE_Y;
 static constexpr int16_t SCOPE_W = DISPLAY_WIDTH;
+
+// --- Optional off-screen scope rendering to reduce flicker ---
+// A full 240x240 16-bit framebuffer is ~115KB, but the scope region is smaller.
+// With current layout, scope is ~240x96 (~46KB), typically OK on ESP32-C6.
+static GFXcanvas16 *scopeCanvas = nullptr;
+
+// --- Optional off-screen text line rendering to reduce flicker ---
+// One line buffer: 240 x UI_LINE_HEIGHT x 2 bytes (~8.6KB with current layout).
+static GFXcanvas16 *textLineCanvas = nullptr;
 
 // --- Oscilloscope buffers (one sample per loop) ---
 static uint16_t voutHistory_mV[SCOPE_W];
@@ -115,16 +121,47 @@ static void drawOscilloscope(uint16_t vout_mV, uint16_t iout_total_mA) {
     iMax = (uint16_t)(mid + 25);
   }
 
-  // Clear and draw a simple scope frame.
+  // Plot oldest->newest left->right.
+  const int16_t plotTopLocal = 1;
+  const int16_t plotHLocal = SCOPE_H - 2;
+  if (plotHLocal <= 1) return;
+
+  // Prefer off-screen rendering to avoid visible clear/redraw flicker.
+  if (scopeCanvas) {
+    scopeCanvas->fillScreen(ST77XX_BLACK);
+    scopeCanvas->drawRect(0, 0, SCOPE_W, SCOPE_H, ST77XX_DARKGREY);
+    scopeCanvas->drawFastHLine(1, SCOPE_H / 2, SCOPE_W - 2, ST77XX_DARKGREY);
+
+    int16_t prevYv = 0;
+    int16_t prevYi = 0;
+    bool havePrev = false;
+
+    for (int16_t x = 0; x < SCOPE_W; x++) {
+      uint16_t idx = (uint16_t)((scopeWriteIndex + x) % SCOPE_W);
+      uint16_t vv = voutHistory_mV[idx];
+      uint16_t ii = ioutHistory_mA[idx];
+
+      int16_t yv = mapToScopeY(vv, vMin, vMax, plotTopLocal, plotHLocal);
+      int16_t yi = mapToScopeY(ii, iMin, iMax, plotTopLocal, plotHLocal);
+
+      if (havePrev) {
+        scopeCanvas->drawLine(x - 1, prevYv, x, yv, ST77XX_CYAN);
+        scopeCanvas->drawLine(x - 1, prevYi, x, yi, ST77XX_YELLOW);
+      }
+      prevYv = yv;
+      prevYi = yi;
+      havePrev = true;
+    }
+
+    // Single blit to the TFT -> much less flicker.
+    tft.drawRGBBitmap(0, SCOPE_Y, scopeCanvas->getBuffer(), SCOPE_W, SCOPE_H);
+    return;
+  }
+
+  // Fallback: direct draw (may flicker).
   tft.fillRect(0, SCOPE_Y, SCOPE_W, SCOPE_H, ST77XX_BLACK);
   tft.drawRect(0, SCOPE_Y, SCOPE_W, SCOPE_H, ST77XX_DARKGREY);
-  // Midline for quick reference.
   tft.drawFastHLine(1, SCOPE_Y + SCOPE_H / 2, SCOPE_W - 2, ST77XX_DARKGREY);
-
-  // Plot oldest->newest left->right.
-  const int16_t plotTop = SCOPE_Y + 1;
-  const int16_t plotH = SCOPE_H - 2;
-  if (plotH <= 1) return;
 
   int16_t prevYv = 0;
   int16_t prevYi = 0;
@@ -135,8 +172,8 @@ static void drawOscilloscope(uint16_t vout_mV, uint16_t iout_total_mA) {
     uint16_t vv = voutHistory_mV[idx];
     uint16_t ii = ioutHistory_mA[idx];
 
-    int16_t yv = mapToScopeY(vv, vMin, vMax, plotTop, plotH);
-    int16_t yi = mapToScopeY(ii, iMin, iMax, plotTop, plotH);
+    int16_t yv = mapToScopeY(vv, vMin, vMax, SCOPE_Y + 1, SCOPE_H - 2);
+    int16_t yi = mapToScopeY(ii, iMin, iMax, SCOPE_Y + 1, SCOPE_H - 2);
 
     if (havePrev) {
       tft.drawLine(x - 1, prevYv, x, yv, ST77XX_CYAN);
@@ -195,7 +232,6 @@ const char *fastChargeType2String(SW35xx::fastChargeType_t fastChargeType) {
 static void drawStatusToDisplay() {
   // Update only the rows that changed to avoid flicker.
   // Text size is set to 2 in setup(). Adafruit classic font is 6x8 px.
-  const uint8_t textSize = UI_TEXT_SIZE;
   const uint16_t fg = ST77XX_WHITE;
   const uint16_t bg = ST77XX_BLACK;
   const int16_t lineHeight = UI_LINE_HEIGHT; // +2 for breathing room
@@ -211,9 +247,21 @@ static void drawStatusToDisplay() {
     last[line][sizeof(last[line]) - 1] = '\0';
 
     int16_t y = line * lineHeight;
-    tft.fillRect(0, y, DISPLAY_WIDTH, lineHeight, bg);
-    tft.setCursor(0, y);
-    tft.print(text);
+
+    // Prefer off-screen line rendering to avoid visible clear/redraw flicker.
+    if (textLineCanvas) {
+      textLineCanvas->fillScreen(bg);
+      textLineCanvas->setTextWrap(false);
+      textLineCanvas->setTextSize(UI_TEXT_SIZE);
+      textLineCanvas->setTextColor(fg, bg);
+      textLineCanvas->setCursor(0, 0);
+      textLineCanvas->print(text);
+      tft.drawRGBBitmap(0, y, textLineCanvas->getBuffer(), DISPLAY_WIDTH, lineHeight);
+    } else {
+      tft.fillRect(0, y, DISPLAY_WIDTH, lineHeight, bg);
+      tft.setCursor(0, y);
+      tft.print(text);
+    }
   };
 
   char buf[40];
@@ -259,10 +307,10 @@ void setup() {
   // (SCK, MISO, MOSI, SS) -> MISO not used, SS not used (CS = -1)
   SPI.begin(TFT_SCLK, -1, TFT_MOSI, -1);
   delay(50);
-  tft.setSPISpeed(TFT_SPI_HZ);
-  delay(50);
   // Important: use MODE3 for the module
   tft.init(240, 240, TFT_SPI_MODE);
+  // Some cores/libraries reset SPI speed during init(); set it after init to be sure.
+  tft.setSPISpeed(TFT_SPI_HZ);
   tft.setRotation(2);
   delay(50);
   tft.fillScreen(ST77XX_BLACK);
@@ -272,9 +320,28 @@ void setup() {
   tft.setTextColor(ST77XX_WHITE, ST77XX_BLACK);
   tft.println("Initialize...");
   backlight(true);
+
+  if (SCOPE_W > 0 && SCOPE_H > 0) {
+    scopeCanvas = new GFXcanvas16(SCOPE_W, SCOPE_H);
+    if (!scopeCanvas) {
+      Serial.println("WARN: scopeCanvas alloc failed, using direct draw");
+    }
+  }
+
+  if (DISPLAY_WIDTH > 0 && UI_LINE_HEIGHT > 0) {
+    textLineCanvas = new GFXcanvas16(DISPLAY_WIDTH, UI_LINE_HEIGHT);
+    if (!textLineCanvas) {
+      Serial.println("WARN: textLineCanvas alloc failed, using direct text draw");
+    }
+  }
+
   Serial.println("init power module");
   Wire.begin(I2C_SDA, I2C_SCL);
   Wire.setClock(10000);   // Drop speed to 10kHz
+#if defined(ARDUINO_ARCH_ESP32)
+  // Avoid getting stuck forever if the I2C bus/device glitches.
+  Wire.setTimeout(50);
+#endif
 
   // Workaround for SW3518S VIN reading (h1_SW35xx issue #9):
   // enable VIN ADC reading only after I2C is initialized and stable.
@@ -287,19 +354,42 @@ void setup() {
 }
 
 void loop() {
-  sw.readStatus();
+  static constexpr uint32_t READ_STATUS_MS = 200;
+  static constexpr uint32_t UI_REFRESH_MS = 200;
+  static constexpr uint32_t SERIAL_LOG_MS = 2000;
 
-  drawStatusToDisplay();
+  // Initialize so the first actions happen immediately.
+  static uint32_t lastReadMs = (uint32_t)(0 - READ_STATUS_MS);
+  static uint32_t lastUiMs = (uint32_t)(0 - UI_REFRESH_MS);
+  static uint32_t lastSerialMs = (uint32_t)(0 - SERIAL_LOG_MS);
 
-  Serial.println("=======================================");
-  Serial.printf("Current input voltage:%dmV\n", sw.vin_mV);
-  Serial.printf("Current output voltage:%dmV\n", sw.vout_mV);
-  Serial.printf("Current USB-C current:%dmA\r\n", sw.iout_usbc_mA);
-  Serial.printf("Current USB-A current:%dmA\r\n", sw.iout_usba_mA);
-  Serial.printf("Current fast charge type:%s\n", fastChargeType2String(sw.fastChargeType));
-  if (sw.fastChargeType == SW35xx::PD_FIX || sw.fastChargeType == SW35xx::PD_PPS)
-    Serial.printf("Current PD version:%d\n", sw.PDVersion);
-  Serial.println("=======================================");
-  Serial.println("");
-  delay(2000);
+  const uint32_t now = millis();
+
+  if ((uint32_t)(now - lastReadMs) >= READ_STATUS_MS) {
+    lastReadMs = now;
+    yield();
+    sw.readStatus();
+    yield();
+  }
+
+  if ((uint32_t)(now - lastUiMs) >= UI_REFRESH_MS) {
+    lastUiMs = now;
+    drawStatusToDisplay();
+  }
+
+  if ((uint32_t)(now - lastSerialMs) >= SERIAL_LOG_MS) {
+    lastSerialMs = now;
+    Serial.println("=======================================");
+    Serial.printf("Current input voltage:%dmV\n", sw.vin_mV);
+    Serial.printf("Current output voltage:%dmV\n", sw.vout_mV);
+    Serial.printf("Current USB-C current:%dmA\r\n", sw.iout_usbc_mA);
+    Serial.printf("Current USB-A current:%dmA\r\n", sw.iout_usba_mA);
+    Serial.printf("Current fast charge type:%s\n", fastChargeType2String(sw.fastChargeType));
+    if (sw.fastChargeType == SW35xx::PD_FIX || sw.fastChargeType == SW35xx::PD_PPS)
+      Serial.printf("Current PD version:%d\n", sw.PDVersion);
+    Serial.println("=======================================");
+    Serial.println("");
+  }
+
+  delay(1);
 }
