@@ -83,7 +83,7 @@ static inline int16_t mapToScopeY(uint16_t value, uint16_t minValue, uint16_t ma
 }
 
 static void drawOscilloscope(uint16_t vout_mV, uint16_t iout_total_mA) {
-  if (SCOPE_H <= 8) return; // not enough space
+  if (SCOPE_H <= 12) return; // need room for 2 lanes + borders
 
   if (!scopeInitialized) {
     for (int16_t i = 0; i < SCOPE_W; i++) {
@@ -94,6 +94,7 @@ static void drawOscilloscope(uint16_t vout_mV, uint16_t iout_total_mA) {
     scopeInitialized = true;
   }
 
+  // Ring buffer: after increment, scopeWriteIndex points at the oldest sample.
   voutHistory_mV[scopeWriteIndex] = vout_mV;
   ioutHistory_mA[scopeWriteIndex] = iout_total_mA;
   scopeWriteIndex = (uint16_t)((scopeWriteIndex + 1) % SCOPE_W);
@@ -102,87 +103,93 @@ static void drawOscilloscope(uint16_t vout_mV, uint16_t iout_total_mA) {
   uint16_t vMin = 65535, vMax = 0;
   uint16_t iMin = 65535, iMax = 0;
   for (int16_t i = 0; i < SCOPE_W; i++) {
-    uint16_t vv = voutHistory_mV[i];
-    uint16_t ii = ioutHistory_mA[i];
+    const uint16_t vv = voutHistory_mV[i];
+    const uint16_t ii = ioutHistory_mA[i];
     if (vv < vMin) vMin = vv;
     if (vv > vMax) vMax = vv;
     if (ii < iMin) iMin = ii;
     if (ii > iMax) iMax = ii;
   }
+
   // Add a little range so flat signals still show.
-  if (vMax - vMin < 50) { // 50mV min range
-    uint16_t mid = (uint16_t)((vMax + vMin) / 2);
+  if ((uint16_t)(vMax - vMin) < 50) { // 50mV min range
+    const uint16_t mid = (uint16_t)(((uint32_t)vMax + (uint32_t)vMin) / 2u);
     vMin = (mid > 25) ? (uint16_t)(mid - 25) : 0;
     vMax = (uint16_t)(mid + 25);
   }
-  if (iMax - iMin < 50) { // 50mA min range
-    uint16_t mid = (uint16_t)((iMax + iMin) / 2);
+  if ((uint16_t)(iMax - iMin) < 50) { // 50mA min range
+    const uint16_t mid = (uint16_t)(((uint32_t)iMax + (uint32_t)iMin) / 2u);
     iMin = (mid > 25) ? (uint16_t)(mid - 25) : 0;
     iMax = (uint16_t)(mid + 25);
   }
 
-  // Plot oldest->newest left->right.
-  const int16_t plotTopLocal = 1;
-  const int16_t plotHLocal = SCOPE_H - 2;
-  if (plotHLocal <= 1) return;
+  // Smooth the scale so it doesn't "jump" every frame.
+  static bool scaleInit = false;
+  static uint16_t vMinS, vMaxS, iMinS, iMaxS;
+  if (!scaleInit) {
+    vMinS = vMin; vMaxS = vMax;
+    iMinS = iMin; iMaxS = iMax;
+    scaleInit = true;
+  } else {
+    // 1/8 update step (cheap low-pass).
+    vMinS = (uint16_t)(((uint32_t)vMinS * 7u + (uint32_t)vMin) / 8u);
+    vMaxS = (uint16_t)(((uint32_t)vMaxS * 7u + (uint32_t)vMax) / 8u);
+    iMinS = (uint16_t)(((uint32_t)iMinS * 7u + (uint32_t)iMin) / 8u);
+    iMaxS = (uint16_t)(((uint32_t)iMaxS * 7u + (uint32_t)iMax) / 8u);
+  }
+  if (vMaxS <= vMinS) vMaxS = (uint16_t)(vMinS + 1);
+  if (iMaxS <= iMinS) iMaxS = (uint16_t)(iMinS + 1);
 
-  // Prefer off-screen rendering to avoid visible clear/redraw flicker.
-  if (scopeCanvas) {
-    scopeCanvas->fillScreen(ST77XX_BLACK);
-    scopeCanvas->drawRect(0, 0, SCOPE_W, SCOPE_H, ST77XX_DARKGREY);
-    scopeCanvas->drawFastHLine(1, SCOPE_H / 2, SCOPE_W - 2, ST77XX_DARKGREY);
+  // Split inner plot area into two lanes (top: VOUT, bottom: IOUT).
+  const int16_t innerTop = 1;
+  const int16_t innerBottom = SCOPE_H - 2;
+  const int16_t innerH = innerBottom - innerTop + 1;
+  const int16_t dividerY = innerTop + innerH / 2;
 
-    int16_t prevYv = 0;
-    int16_t prevYi = 0;
+  const int16_t vTop = innerTop;
+  const int16_t vH = dividerY - innerTop;              // pixels available above divider
+  const int16_t iTop = dividerY + 1;
+  const int16_t iH = innerBottom - iTop + 1;           // pixels available below divider
+  if (vH <= 1 || iH <= 1) return;
+
+  auto renderScope = [&](auto &gfx, int16_t originY) {
+    // originY: 0 for canvas, SCOPE_Y for direct TFT draw
+    gfx.fillRect(0, originY, SCOPE_W, SCOPE_H, ST77XX_BLACK);
+    gfx.drawRect(0, originY, SCOPE_W, SCOPE_H, ST77XX_DARKGREY);
+
+    // Lane divider
+    gfx.drawFastHLine(1, originY + dividerY, SCOPE_W - 2, ST77XX_DARKGREY);
+
+    int16_t prevYv = 0, prevYi = 0;
     bool havePrev = false;
 
     for (int16_t x = 0; x < SCOPE_W; x++) {
-      uint16_t idx = (uint16_t)((scopeWriteIndex + x) % SCOPE_W);
-      uint16_t vv = voutHistory_mV[idx];
-      uint16_t ii = ioutHistory_mA[idx];
+      const uint16_t idx = (uint16_t)((scopeWriteIndex + x) % SCOPE_W);
+      const uint16_t vv = voutHistory_mV[idx];
+      const uint16_t ii = ioutHistory_mA[idx];
 
-      int16_t yv = mapToScopeY(vv, vMin, vMax, plotTopLocal, plotHLocal);
-      int16_t yi = mapToScopeY(ii, iMin, iMax, plotTopLocal, plotHLocal);
+      const int16_t yv = mapToScopeY(vv, vMinS, vMaxS, originY + vTop, vH);
+      const int16_t yi = mapToScopeY(ii, iMinS, iMaxS, originY + iTop, iH);
 
       if (havePrev) {
-        scopeCanvas->drawLine(x - 1, prevYv, x, yv, ST77XX_CYAN);
-        scopeCanvas->drawLine(x - 1, prevYi, x, yi, ST77XX_YELLOW);
+        gfx.drawLine(x - 1, prevYv, x, yv, ST77XX_CYAN);
+        gfx.drawLine(x - 1, prevYi, x, yi, ST77XX_YELLOW);
       }
       prevYv = yv;
       prevYi = yi;
       havePrev = true;
     }
+  };
 
-    // Single blit to the TFT -> much less flicker.
+  if (scopeCanvas) {
+    // Render off-screen (0-based coords), then blit once.
+    renderScope(*scopeCanvas, 0);
     tft.drawRGBBitmap(0, SCOPE_Y, scopeCanvas->getBuffer(), SCOPE_W, SCOPE_H);
     return;
   }
 
-  // Fallback: direct draw (may flicker).
-  tft.fillRect(0, SCOPE_Y, SCOPE_W, SCOPE_H, ST77XX_BLACK);
-  tft.drawRect(0, SCOPE_Y, SCOPE_W, SCOPE_H, ST77XX_DARKGREY);
-  tft.drawFastHLine(1, SCOPE_Y + SCOPE_H / 2, SCOPE_W - 2, ST77XX_DARKGREY);
-
-  int16_t prevYv = 0;
-  int16_t prevYi = 0;
-  bool havePrev = false;
-
-  for (int16_t x = 0; x < SCOPE_W; x++) {
-    uint16_t idx = (uint16_t)((scopeWriteIndex + x) % SCOPE_W);
-    uint16_t vv = voutHistory_mV[idx];
-    uint16_t ii = ioutHistory_mA[idx];
-
-    int16_t yv = mapToScopeY(vv, vMin, vMax, SCOPE_Y + 1, SCOPE_H - 2);
-    int16_t yi = mapToScopeY(ii, iMin, iMax, SCOPE_Y + 1, SCOPE_H - 2);
-
-    if (havePrev) {
-      tft.drawLine(x - 1, prevYv, x, yv, ST77XX_CYAN);
-      tft.drawLine(x - 1, prevYi, x, yi, ST77XX_YELLOW);
-    }
-    prevYv = yv;
-    prevYi = yi;
-    havePrev = true;
-  }
+  // Fallback: direct render into the TFT (may flicker).
+  renderScope(tft, SCOPE_Y);
 }
 
 const char *fastChargeType2String(SW35xx::fastChargeType_t fastChargeType) {
