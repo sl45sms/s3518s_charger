@@ -18,12 +18,16 @@
 
 #include <WiFi.h>
 #include <WebServer.h>
+#include <FS.h>
+#include <SPIFFS.h>
 
 static constexpr const char *WIFI_SSID = YOUR_WIFI_SSID;
 static constexpr const char *WIFI_PASS = YOUR_WIFI_PASSWORD;
 static constexpr uint16_t WEB_PORT = 80;
 
 static WebServer server(WEB_PORT);
+static bool gFsReady = false;
+static const char *gFsName = "";
 
 struct CachedStatus {
   uint32_t ms;
@@ -58,7 +62,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>SW3518 Monitor</title>
+  <title>SW3518 Basic Monitor</title>
   <style>
     body{font-family:system-ui,Segoe UI,Arial,sans-serif;margin:16px;max-width:720px}
     .row{display:flex;gap:12px;flex-wrap:wrap}
@@ -102,6 +106,18 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
 )HTML";
 
 static void handleRoot() {
+  if (gFsReady) {
+    File f = SPIFFS.open("/index.html", "r");
+    if (f) {
+      Serial.printf("Serving /index.html from %s (%u bytes)\n", gFsName, (unsigned)f.size());
+      server.streamFile(f, "text/html; charset=utf-8");
+      f.close();
+      return;
+    } else {
+      Serial.printf("/index.html not found on %s, falling back\n", gFsName);
+    }
+  }
+
   server.sendHeader("Cache-Control", "no-store");
   server.send_P(200, "text/html; charset=utf-8", INDEX_HTML);
 }
@@ -184,6 +200,24 @@ bool webEnabled() { return ENABLE_WEBSERVER; }
 
 void webInit() {
   webSetupRoutes();
+  gFsReady = SPIFFS.begin(false);
+  gFsName = "SPIFFS";
+  if (!gFsReady) {
+    Serial.println("SPIFFS mount failed; trying to format...");
+    gFsReady = SPIFFS.begin(true); // format if uninitialized
+  }
+  if (gFsReady) {
+    Serial.printf("%s mount OK\n", gFsName);
+    File f = SPIFFS.open("/index.html", "r");
+    if (f) {
+      Serial.printf("Found /index.html (%u bytes)\n", (unsigned)f.size());
+      f.close();
+    } else {
+      Serial.println("/index.html missing on FS; will serve embedded page");
+    }
+  } else {
+    Serial.println("SPIFFS mount still failing; using embedded index.html");
+  }
 
   uint8_t macAddr[6];
   WiFi.macAddress(macAddr);

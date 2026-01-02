@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>SW3518 Monitor</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Arial,sans-serif;margin:16px;max-width:720px}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .card{border:1px solid #ddd;border-radius:8px;padding:12px;min-width:200px}
+    .k{color:#666;font-size:12px}
+    .v{font-size:22px;font-weight:600}
+    code{background:#f6f6f6;padding:2px 6px;border-radius:6px}
+  </style>
+</head>
+<body>
+  <h2>SW3518 Status index.html</h2>
+  <div class="row">
+    <div class="card"><div class="k">VIN</div><div class="v" id="vin">-</div></div>
+    <div class="card"><div class="k">VOUT</div><div class="v" id="vout">-</div></div>
+    <div class="card"><div class="k">USB-C</div><div class="v" id="usbc">-</div></div>
+    <div class="card"><div class="k">USB-A</div><div class="v" id="usba">-</div></div>
+    <div class="card"><div class="k">Type</div><div class="v" id="type">-</div></div>
+    <div class="card"><div class="k">PD</div><div class="v" id="pd">-</div></div>
+  </div>
+  <p>API: <code>/api/status</code></p>
+  <script>
+    async function tick(){
+      try{
+        const r = await fetch('/api/status', {cache:'no-store'});
+        if(!r.ok) throw new Error(r.status);
+        const j = await r.json();
+        document.getElementById('vin').textContent  = j.vin_mV + ' mV';
+        document.getElementById('vout').textContent = j.vout_mV + ' mV';
+        document.getElementById('usbc').textContent = j.iout_usbc_mA + ' mA';
+        document.getElementById('usba').textContent = j.iout_usba_mA + ' mA';
+        document.getElementById('type').textContent = j.fastChargeType;
+        document.getElementById('pd').textContent   = j.pdVersion ? ('v' + j.pdVersion) : '-';
+      }catch(e){
+      }
+      setTimeout(tick, 500);
+    }
+    tick();
+  </script>
+</body>
+</html>
