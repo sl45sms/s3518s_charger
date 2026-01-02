@@ -1,0 +1,51 @@
+{
+    "project_name": "s3518s_charger",
+    "build_system": "arduino-cli",
+    "board_FQBN": "esp32:esp32:esp32c6",
+    "board_name": "ESP32C6 Dev Module",
+    "esp32_chip": "ESP32-C6",
+    "module_name": "ESP32-C6-DevKitC-1-N8 Development Board",
+    "display_type": "ST7789",
+    "display_interface": "SPI",
+    "power_chip": "S3518S",
+    "power_chip_interface": "I2C",
+    "pins": {
+        "SCL": 20,
+        "SDA": 23,
+        "TFT_CS": -1,
+        "TFT_DC": 11,
+        "TFT_RST": 10,
+        "TFT_MOSI": 7,
+        "TFT_MISO": 2,
+        "TFT_SCLK": 6,
+        "TFT_BLK": 3
+    },
+    "lp_core": {
+        "enabled": true,
+        "target": "esp32c6",
+        "runtime": "ulp_riscv",
+        "responsibilities": {
+            "s3518s_i2c_polling": true,
+            "gpio_outputs": true
+        },
+
+        "constraints": {
+            "note": "ESP32-C6 LP/ULP typically can only access LP/RTC-capable GPIO/peripherals. Do not assume normal GPIO/I2C pins are usable from LP core; validate and fall back to main core if not."
+        },
+
+        "s3518s_i2c": {
+            "strategy": "lp_core_if_supported_else_main_core",
+            "lp_strategy": "bitbang_on_lp_gpio_or_not_supported",
+            "sample_period_ms": 50,
+            "lp_pins": {
+                "SCL": null,
+                "SDA": null
+            }
+        },
+
+        "gpio_outputs": {
+            "lp_managed_pins": [],
+            "default_level": "keep"
+        }
+    }
+}
