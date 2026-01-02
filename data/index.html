@@ -4,43 +4,319 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>SW3518 Monitor</title>
+
+  <!-- Modern lightweight CSS framework (CDN) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+
+  <!-- Chart library (CDN) -->
+  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
   <style>
-    body{font-family:system-ui,Segoe UI,Arial,sans-serif;margin:16px;max-width:720px}
-    .row{display:flex;gap:12px;flex-wrap:wrap}
-    .card{border:1px solid #ddd;border-radius:8px;padding:12px;min-width:200px}
-    .k{color:#666;font-size:12px}
-    .v{font-size:22px;font-weight:600}
-    code{background:#f6f6f6;padding:2px 6px;border-radius:6px}
+    :root {
+      --card-pad: 0.9rem;
+    }
+    body { padding: 1rem; }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-bottom: 0.75rem;
+    }
+    header hgroup { margin: 0; }
+    .statusline {
+      font-size: 0.9rem;
+      opacity: 0.85;
+    }
+    .dot {
+      display: inline-block;
+      width: 0.55rem;
+      height: 0.55rem;
+      border-radius: 999px;
+      background: #999;
+      margin-right: 0.4rem;
+      vertical-align: -0.05rem;
+    }
+    .dot.ok { background: #2a9d8f; }
+    .dot.bad { background: #e76f51; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.75rem;
+    }
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 600px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+    .metric {
+      padding: var(--card-pad);
+      border-radius: var(--pico-border-radius);
+      border: 1px solid var(--pico-muted-border-color);
+      background: var(--pico-card-background-color);
+    }
+    .metric .k { font-size: 0.8rem; opacity: 0.8; margin: 0; }
+    .metric .v { font-size: 1.6rem; font-weight: 650; margin: 0.15rem 0 0; }
+    .metric .sub { font-size: 0.85rem; opacity: 0.75; margin: 0.25rem 0 0; }
+
+    .scope {
+      padding: var(--card-pad);
+      border-radius: var(--pico-border-radius);
+      border: 1px solid var(--pico-muted-border-color);
+      background: var(--pico-card-background-color);
+    }
+    .scope canvas {
+      width: 100% !important;
+      height: 320px !important;
+      border-radius: calc(var(--pico-border-radius) - 2px);
+      background:
+        linear-gradient(rgba(0,0,0,0.04), rgba(0,0,0,0.04)),
+        repeating-linear-gradient(90deg, rgba(0,0,0,0.05) 0 1px, transparent 1px 24px),
+        repeating-linear-gradient(0deg, rgba(0,0,0,0.05) 0 1px, transparent 1px 24px);
+    }
+    .api {
+      font-size: 0.9rem;
+      opacity: 0.85;
+      margin-top: 0.75rem;
+    }
+    code { padding: 0.05rem 0.35rem; }
   </style>
 </head>
 <body>
-  <h2>SW3518 Status index.html</h2>
-  <div class="row">
-    <div class="card"><div class="k">VIN</div><div class="v" id="vin">-</div></div>
-    <div class="card"><div class="k">VOUT</div><div class="v" id="vout">-</div></div>
-    <div class="card"><div class="k">USB-C</div><div class="v" id="usbc">-</div></div>
-    <div class="card"><div class="k">USB-A</div><div class="v" id="usba">-</div></div>
-    <div class="card"><div class="k">Type</div><div class="v" id="type">-</div></div>
-    <div class="card"><div class="k">PD</div><div class="v" id="pd">-</div></div>
-  </div>
-  <p>API: <code>/api/status</code></p>
+  <main class="container">
+    <header>
+      <hgroup>
+        <h2 style="margin-bottom:0">SW3518 Monitor</h2>
+        <p class="statusline">
+          <span id="connDot" class="dot"></span><span id="connText">Connecting…</span>
+          <span style="padding:0 0.5rem">·</span>
+          <span>Updated <span id="updatedAgo">-</span>s ago</span>
+        </p>
+      </hgroup>
+      <small class="statusline">API: <code>/api/status</code></small>
+    </header>
+
+    <section class="grid" aria-label="Live status">
+      <div class="metric">
+        <p class="k">VIN</p>
+        <p class="v" id="vin">-</p>
+        <p class="sub" id="vinSub">-</p>
+      </div>
+      <div class="metric">
+        <p class="k">VOUT</p>
+        <p class="v" id="vout">-</p>
+        <p class="sub" id="voutSub">-</p>
+      </div>
+      <div class="metric">
+        <p class="k">Current (USB-C)</p>
+        <p class="v" id="usbc">-</p>
+        <p class="sub" id="usbcSub">-</p>
+      </div>
+      <div class="metric">
+        <p class="k">Current (USB-A)</p>
+        <p class="v" id="usba">-</p>
+        <p class="sub" id="usbaSub">-</p>
+      </div>
+      <div class="metric">
+        <p class="k">Total Output</p>
+        <p class="v" id="iout">-</p>
+        <p class="sub" id="type">-</p>
+      </div>
+      <div class="metric">
+        <p class="k">PD Version</p>
+        <p class="v" id="pd">-</p>
+        <p class="sub" id="uptime">Uptime: -</p>
+      </div>
+    </section>
+
+    <section class="scope" style="margin-top:0.75rem" aria-label="Oscilloscope">
+      <h3 style="margin:0 0 0.5rem">Oscilloscope</h3>
+      <canvas id="scope"></canvas>
+      <small class="statusline">Shows the last ~60s (updates every 0.5s)</small>
+    </section>
+  </main>
+
   <script>
-    async function tick(){
-      try{
-        const r = await fetch('/api/status', {cache:'no-store'});
-        if(!r.ok) throw new Error(r.status);
+    const el = (id) => document.getElementById(id);
+    const connDot = el('connDot');
+    const connText = el('connText');
+    const updatedAgo = el('updatedAgo');
+
+    const fmtV = (mV) => {
+      if (typeof mV !== 'number') return '-';
+      return (mV / 1000).toFixed(3) + ' V';
+    };
+    const fmtA = (mA) => {
+      if (typeof mA !== 'number') return '-';
+      return (mA / 1000).toFixed(3) + ' A';
+    };
+    const fmtMA = (mA) => {
+      if (typeof mA !== 'number') return '-';
+      return mA.toFixed(0) + ' mA';
+    };
+    const fmtMs = (ms) => {
+      if (typeof ms !== 'number') return '-';
+      const s = Math.floor(ms / 1000);
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const ss = s % 60;
+      if (h > 0) return `${h}h ${m}m ${ss}s`;
+      if (m > 0) return `${m}m ${ss}s`;
+      return `${ss}s`;
+    };
+
+    const MAX_POINTS = 120; // 120 points * 0.5s = ~60s
+    const labels = Array.from({length: MAX_POINTS}, () => '');
+    const dataVinV = [];
+    const dataVoutV = [];
+    const dataIoutA = [];
+
+    let chart;
+    function initChart() {
+      const ctx = el('scope');
+      chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            {
+              label: 'VIN (V)',
+              data: dataVinV,
+              borderColor: '#2a9d8f',
+              borderWidth: 2,
+              pointRadius: 0,
+              tension: 0,
+              yAxisID: 'yV'
+            },
+            {
+              label: 'VOUT (V)',
+              data: dataVoutV,
+              borderColor: '#264653',
+              borderWidth: 2,
+              pointRadius: 0,
+              tension: 0,
+              yAxisID: 'yV'
+            },
+            {
+              label: 'IOUT (A)',
+              data: dataIoutA,
+              borderColor: '#e76f51',
+              borderWidth: 2,
+              pointRadius: 0,
+              tension: 0,
+              yAxisID: 'yA'
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          interaction: { intersect: false, mode: 'index' },
+          plugins: {
+            legend: { position: 'top' },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => {
+                  const v = ctx.raw;
+                  if (ctx.dataset.yAxisID === 'yV') return `${ctx.dataset.label}: ${Number(v).toFixed(3)} V`;
+                  return `${ctx.dataset.label}: ${Number(v).toFixed(3)} A`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: { display: false },
+            yV: {
+              type: 'linear',
+              position: 'left',
+              title: { display: true, text: 'Volts' },
+              grid: { color: 'rgba(0,0,0,0.08)' },
+              ticks: { callback: (v) => v + ' V' }
+            },
+            yA: {
+              type: 'linear',
+              position: 'right',
+              title: { display: true, text: 'Amps' },
+              grid: { drawOnChartArea: false },
+              ticks: { callback: (v) => v + ' A' }
+            }
+          }
+        }
+      });
+    }
+
+    function pushPoint(arr, value) {
+      arr.push(value);
+      if (arr.length > MAX_POINTS) arr.shift();
+      while (arr.length < MAX_POINTS) arr.unshift(null);
+    }
+
+    let lastOkMs = 0;
+    let lastFetchAt = 0;
+
+    function setConn(ok, text) {
+      connDot.classList.toggle('ok', ok);
+      connDot.classList.toggle('bad', !ok);
+      connText.textContent = text;
+    }
+
+    async function tick() {
+      lastFetchAt = Date.now();
+      try {
+        const r = await fetch('/api/status', { cache: 'no-store' });
+        if (!r.ok) throw new Error(String(r.status));
         const j = await r.json();
-        document.getElementById('vin').textContent  = j.vin_mV + ' mV';
-        document.getElementById('vout').textContent = j.vout_mV + ' mV';
-        document.getElementById('usbc').textContent = j.iout_usbc_mA + ' mA';
-        document.getElementById('usba').textContent = j.iout_usba_mA + ' mA';
-        document.getElementById('type').textContent = j.fastChargeType;
-        document.getElementById('pd').textContent   = j.pdVersion ? ('v' + j.pdVersion) : '-';
-      }catch(e){
+
+        lastOkMs = Date.now();
+        setConn(true, 'Connected');
+
+        el('vin').textContent = fmtV(j.vin_mV);
+        el('vout').textContent = fmtV(j.vout_mV);
+        el('usbc').textContent = fmtA(j.iout_usbc_mA);
+        el('usba').textContent = fmtA(j.iout_usba_mA);
+        el('iout').textContent = fmtA(j.iout_total_mA);
+
+        el('vinSub').textContent = j.vin_mV + ' mV';
+        el('voutSub').textContent = j.vout_mV + ' mV';
+        el('usbcSub').textContent = fmtMA(j.iout_usbc_mA);
+        el('usbaSub').textContent = fmtMA(j.iout_usba_mA);
+        el('type').textContent = j.fastChargeType || '-';
+        el('pd').textContent = (j.pdVersion && j.pdVersion > 0) ? ('v' + j.pdVersion) : '-';
+        el('uptime').textContent = 'Uptime: ' + fmtMs(j.ms);
+
+        pushPoint(dataVinV, (j.vin_mV ?? 0) / 1000);
+        pushPoint(dataVoutV, (j.vout_mV ?? 0) / 1000);
+        pushPoint(dataIoutA, (j.iout_total_mA ?? 0) / 1000);
+
+        if (chart) chart.update('none');
+      } catch (e) {
+        setConn(false, 'Offline');
       }
+
       setTimeout(tick, 500);
     }
-    tick();
+
+    function loopUi() {
+      const now = Date.now();
+      const age = lastOkMs ? Math.max(0, Math.floor((now - lastOkMs) / 1000)) : null;
+      updatedAgo.textContent = age == null ? '-' : String(age);
+      requestAnimationFrame(loopUi);
+    }
+
+    window.addEventListener('load', () => {
+      // Wait for Chart.js to be available.
+      if (window.Chart) {
+        initChart();
+      } else {
+        setConn(false, 'Chart.js failed to load');
+      }
+      tick();
+      loopUi();
+    });
   </script>
 </body>
 </html>
