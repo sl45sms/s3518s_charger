@@ -222,8 +222,8 @@
               callbacks: {
                 label: (ctx) => {
                   const v = ctx.raw;
-                  if (ctx.dataset.yAxisID === 'yV') return `${ctx.dataset.label}: ${Number(v).toFixed(3)} V`;
-                  return `${ctx.dataset.label}: ${Number(v).toFixed(3)} A`;
+                  if (ctx.dataset.yAxisID === 'yV') return `${ctx.dataset.label}: ${Number(v).toFixed(2)} V`;
+                  return `${ctx.dataset.label}: ${Number(v).toFixed(2)} A`;
                 }
               }
             }
@@ -235,14 +235,14 @@
               position: 'left',
               title: { display: true, text: 'Volts' },
               grid: { color: 'rgba(0,0,0,0.08)' },
-              ticks: { callback: (v) => v + ' V' }
+              ticks: { callback: (v) => Number(v).toFixed(2) + ' V' }
             },
             yA: {
               type: 'linear',
               position: 'right',
               title: { display: true, text: 'Amps' },
               grid: { drawOnChartArea: false },
-              ticks: { callback: (v) => v + ' A' }
+              ticks: { callback: (v) => Number(v).toFixed(2) + ' A' }
             }
           }
         }
