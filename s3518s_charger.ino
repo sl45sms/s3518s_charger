@@ -53,17 +53,15 @@ void loop() {
 
   if ((uint32_t)(now - lastSerialMs) >= SERIAL_LOG_MS) {
     lastSerialMs = now;
-    Serial.println("Current:===============================");
-    Serial.printf("Input voltage:%dmV\n", status.vin_mV);
-    Serial.printf("Output voltage:%dmV\n", status.vout_mV);
-    Serial.printf("USB-C current:%dmA\r\n", status.iout_usbc_mA);
-    Serial.printf("USB-A current:%dmA\r\n", status.iout_usba_mA);
-    Serial.printf("Fast charge type:%s\n", fastChargeType2String(status.fastChargeType));
+    Serial.print('\r');
+    Serial.printf("VIN:%dmV VOUT:%dmV USBC:%dmA USBA:%dmA FC:%s",
+            status.vin_mV, status.vout_mV, status.iout_usbc_mA, status.iout_usba_mA,
+            fastChargeType2String(status.fastChargeType));
     if (status.fastChargeType == SW35xx::PD_FIX || status.fastChargeType == SW35xx::PD_PPS) {
-      Serial.printf("PD version:%d\n", status.pdVersion);
+      Serial.printf(" PD:%d", status.pdVersion);
     }
-    Serial.println("=======================================");
-    Serial.println("");
+    Serial.print("          "); // pad to overwrite remnants from longer previous line
+    Serial.flush();
   }
 
   delay(1);
