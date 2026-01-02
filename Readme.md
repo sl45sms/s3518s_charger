@@ -17,6 +17,8 @@ Also have a webserver to remotely monitor the charger status, with graphs and da
 
 4. use arduino-cli via build.sh to build and upload to your board.
 
+Note: The web UI is served from SPIFFS. The contents of ./data (including data/index.html) are packed into a SPIFFS image and flashed by build.sh.
+
 # hardware
 The charger is based on the SS3518S chip from Silan Microelectronics.
 It supports various battery chemistries and has built-in safety features.
